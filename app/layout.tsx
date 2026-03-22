@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Barlow } from 'next/font/google'
 import './globals.css'
 import { Providers } from './providers'
 import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     >
       <body className="h-full">
         <Analytics />
+        <SpeedInsights />
         <Providers>{children}</Providers>
       </body>
     </html>
