@@ -33,6 +33,7 @@ export const UpdateCalloutSchema = z.object({
   geometry: GeometrySchema.optional(),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
   visible: z.boolean().optional(),
+  order: z.number().optional(),
   parentId: z.string().nullable().optional(),
 })
 

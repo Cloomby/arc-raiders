@@ -35,6 +35,7 @@ export interface ICallout extends Document {
   geometry: IGeometry
   color: string
   visible: boolean
+  order: number
   parentId: mongoose.Types.ObjectId | null
   comments: IComment[]
   auditLog: IAuditEntry[]
@@ -90,6 +91,7 @@ const CalloutSchema = new Schema<ICallout>(
     geometry: { type: GeometrySchema, required: true },
     color: { type: String, default: '#FFD700', match: /^#[0-9A-Fa-f]{6}$/ },
     visible: { type: Boolean, default: true },
+    order: { type: Number, default: Date.now },
     parentId: { type: Schema.Types.ObjectId, ref: 'Callout', default: null },
     comments: [CommentSchema],
     auditLog: [AuditSchema],

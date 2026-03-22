@@ -41,6 +41,7 @@ interface CalloutDoc {
   geometry: IGeometry
   color: string
   visible: boolean
+  order: number
   parentId?: string | null
   comments?: IComment[]
   auditLog?: IAuditEntry[]
@@ -115,7 +116,6 @@ export default function MapPage() {
       return res.json()
     },
     onMutate: async ({ id, geometry }) => {
-      // Optimistic update
       await queryClient.cancelQueries({ queryKey: ['callouts'] })
       const previous = queryClient.getQueryData<CalloutDoc[]>(['callouts'])
       queryClient.setQueryData<CalloutDoc[]>(['callouts'], (old = []) =>
@@ -154,6 +154,30 @@ export default function MapPage() {
       const previous = queryClient.getQueryData<CalloutDoc[]>(['callouts'])
       queryClient.setQueryData<CalloutDoc[]>(['callouts'], (old = []) =>
         old.map((c) => (c._id === id ? { ...c, visible } : c))
+      )
+      return { previous }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(['callouts'], ctx.previous)
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['callouts'] }),
+  })
+
+  const reorderMutation = useMutation({
+    mutationFn: async (items: { id: string; order: number }[]) => {
+      const res = await fetch('/api/callouts/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(items),
+      })
+      if (!res.ok) throw new Error('Failed to reorder callouts')
+    },
+    onMutate: async (items) => {
+      await queryClient.cancelQueries({ queryKey: ['callouts'] })
+      const previous = queryClient.getQueryData<CalloutDoc[]>(['callouts'])
+      const orderMap = new Map(items.map((i) => [i.id, i.order]))
+      queryClient.setQueryData<CalloutDoc[]>(['callouts'], (old = []) =>
+        old.map((c) => orderMap.has(c._id) ? { ...c, order: orderMap.get(c._id)! } : c)
       )
       return { previous }
     },
@@ -215,11 +239,21 @@ export default function MapPage() {
     [callouts, toggleVisibilityMutation]
   )
 
+  const handleReorder = useCallback(
+    (items: { id: string; order: number }[]) => {
+      reorderMutation.mutate(items)
+    },
+    [reorderMutation]
+  )
+
   const selectedCallout = selectedId ? callouts.find((c) => c._id === selectedId) : null
   const topCount = callouts.filter((c) => c.layer === 'top').length
   const bottomCount = callouts.filter((c) => c.layer === 'bottom').length
 
-  const canvasCallouts = callouts.filter((c) => c.layer === layer).map((c) => ({
+  // Sort by order so the canvas renders in a stable z-order
+  const sortedCallouts = [...callouts].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+
+  const canvasCallouts = sortedCallouts.filter((c) => c.layer === layer).map((c) => ({
     _id: c._id,
     name: c.name,
     layer: c.layer as MapLayer,
@@ -243,17 +277,20 @@ export default function MapPage() {
         {/* Left: Callout tree */}
         <div className="w-52 shrink-0 overflow-hidden">
           <CalloutSidebar
-            callouts={callouts.map((c) => ({
+            callouts={sortedCallouts.map((c) => ({
               _id: c._id,
               name: c.name,
               layer: c.layer as MapLayer,
               color: c.color,
               visible: c.visible,
+              order: c.order ?? 0,
               parentId: c.parentId?.toString() ?? null,
             }))}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onToggleVisibility={handleToggleVisibility}
+            onReorder={handleReorder}
+            canEdit={canEdit}
             layer={layer}
           />
         </div>
@@ -281,6 +318,7 @@ export default function MapPage() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             mode={drawingMode}
+            onModeChange={setDrawingMode}
             canEdit={canEdit}
             onCreateCallout={handleCreateCallout}
             onUpdateGeometry={handleUpdateGeometry}
@@ -293,6 +331,12 @@ export default function MapPage() {
           <div className="w-72 shrink-0 overflow-hidden">
             <CalloutPopup
               callout={selectedCallout}
+              allCallouts={callouts.map((c) => ({
+                _id: c._id,
+                name: c.name,
+                layer: c.layer,
+                parentId: c.parentId ?? null,
+              }))}
               onClose={() => setSelectedId(null)}
               canEdit={canEdit}
               canComment={canComment}

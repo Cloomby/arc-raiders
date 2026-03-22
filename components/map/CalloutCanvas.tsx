@@ -31,6 +31,7 @@ interface CalloutCanvasProps {
   selectedId: string | null
   onSelect: (id: string | null) => void
   mode: DrawingMode
+  onModeChange: (mode: DrawingMode) => void
   canEdit: boolean
   onCreateCallout: (geometry: Geometry) => void
   onUpdateGeometry: (id: string, geometry: Geometry) => void
@@ -153,6 +154,7 @@ export function CalloutCanvas({
   selectedId,
   onSelect,
   mode,
+  onModeChange,
   canEdit,
   onCreateCallout,
   onUpdateGeometry,
@@ -262,12 +264,22 @@ export function CalloutCanvas({
   const shiftHeldRef = useRef(false)
   const [shiftHeld, setShiftHeld] = useState(false)
   useEffect(() => {
-    const down = (e: KeyboardEvent) => { if (e.key === 'Shift') { shiftHeldRef.current = true;  setShiftHeld(true) } }
-    const up   = (e: KeyboardEvent) => { if (e.key === 'Shift') { shiftHeldRef.current = false; setShiftHeld(false) } }
+    const down = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') { shiftHeldRef.current = true; setShiftHeld(true) }
+      if (e.key === 'Escape') {
+        setPolyPoints([])
+        setIsPolygonOpen(false)
+        setPolyMousePos(null)
+        isDrawingRef.current = false
+        setDrawPreview(null)
+        onModeChange('select')
+      }
+    }
+    const up = (e: KeyboardEvent) => { if (e.key === 'Shift') { shiftHeldRef.current = false; setShiftHeld(false) } }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup',   up)
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
-  }, [])
+  }, [onModeChange])
 
   // ── Transformer sync ────────────────────────────────────────────────────────
   // Only rectangles use the transformer; polygons use vertex handles.
@@ -660,7 +672,7 @@ export function CalloutCanvas({
               />
             )}
 
-            {/* Callout shapes */}
+            {/* Pass 1: Callout shapes (no labels, so labels can be drawn on top in pass 2) */}
             {callouts.filter((c) => c.visible).map((callout) => {
               const isSelected = callout._id === selectedId
               const isHighlighted = callout._id === highlightId
@@ -672,46 +684,25 @@ export function CalloutCanvas({
                 const { x = 0, y = 0, width: w = 0, height: h = 0, rotation = 0 } = callout.geometry
                 const { x: px, y: py } = normToImage(x, y)
                 const pw = w * imageW, ph = h * imageH
-                const lcx = px + pw / 2, lcy = py + ph / 2
-                const fs = 14 / vpScale, padV = 3 / vpScale, padH = 6 / vpScale
-                const bgW = callout.name.length * fs * 0.52 + padH * 2
-                const bgH = fs + padV * 2
                 return (
-                  <React.Fragment key={callout._id}>
-                    <Rect
-                      ref={(node) => { if (isSelected && node) selectedNodeRef.current = node }}
-                      x={px} y={py} width={pw} height={ph} rotation={rotation}
-                      fill={callout.color + fillOpacity} stroke={stroke} strokeWidth={strokeWidth}
-                      draggable={canEdit && mode === 'select'}
-                      onClick={() => onSelect(callout._id)}
-                      onTap={() => onSelect(callout._id)}
-                      onDragEnd={(e) => handleShapeDragEnd(callout, e)}
-                      onTransformEnd={(e) => handleTransformEnd(callout, e)}
-                    />
-                    <Rect
-                      x={lcx - bgW / 2} y={lcy - bgH / 2}
-                      width={bgW} height={bgH}
-                      fill="rgba(0,0,0,0.65)" cornerRadius={2 / vpScale} listening={false}
-                    />
-                    <Text
-                      x={lcx - bgW / 2} y={lcy - bgH / 2 + padV}
-                      width={bgW} align="center"
-                      text={callout.name} fontSize={fs} fontFamily="Barlow" fill="#fff" listening={false}
-                    />
-                  </React.Fragment>
+                  <Rect
+                    key={callout._id}
+                    ref={(node) => { if (isSelected && node) selectedNodeRef.current = node }}
+                    x={px} y={py} width={pw} height={ph} rotation={rotation}
+                    fill={callout.color + fillOpacity} stroke={stroke} strokeWidth={strokeWidth}
+                    draggable={canEdit && mode === 'select'}
+                    onClick={() => onSelect(callout._id)}
+                    onTap={() => onSelect(callout._id)}
+                    onDragEnd={(e) => handleShapeDragEnd(callout, e)}
+                    onTransformEnd={(e) => handleTransformEnd(callout, e)}
+                  />
                 )
               }
 
               if (callout.geometry.type === 'polygon' && callout.geometry.points) {
                 const pts = callout.geometry.points
                 const flat = pts.flatMap((p, i) => i % 2 === 0 ? p * imageW : p * imageH)
-                const xs = flat.filter((_, i) => i % 2 === 0)
-                const ys = flat.filter((_, i) => i % 2 !== 0)
-                const cx = xs.reduce((a, b) => a + b, 0) / xs.length
-                const cy = ys.reduce((a, b) => a + b, 0) / ys.length
-
                 return (
-                  // Group wraps Line + vertex handles so they translate together when dragged
                   <Group
                     key={callout._id}
                     draggable={canEdit && mode === 'select'}
@@ -732,26 +723,6 @@ export function CalloutCanvas({
                       onClick={() => onSelect(callout._id)}
                       onTap={() => onSelect(callout._id)}
                     />
-                    {(() => {
-                      const fs = 14 / vpScale, padV = 3 / vpScale, padH = 6 / vpScale
-                      const bgW = callout.name.length * fs * 0.4 + padH * 2
-                      const bgH = fs + padV * 2
-                      return (
-                        <>
-                          <Rect
-                            x={cx - bgW / 2} y={cy - bgH / 2}
-                            width={bgW} height={bgH}
-                            fill="rgba(0,0,0,0.65)" cornerRadius={2 / vpScale} listening={false}
-                          />
-                          <Text
-                            x={cx - bgW / 2} y={cy - bgH / 2 + padV}
-                            width={bgW} align="center"
-                            text={callout.name} fontSize={fs} fontFamily="Barlow" fill="#fff" listening={false}
-                          />
-                        </>
-                      )
-                    })()}
-
                     {/* Vertex edit handles — only for editors with the polygon selected */}
                     {canEdit && mode === 'select' && isSelected &&
                       pts.map((_, vi) => {
@@ -774,6 +745,60 @@ export function CalloutCanvas({
                       })
                     }
                   </Group>
+                )
+              }
+
+              return null
+            })}
+
+            {/* Pass 2: Labels — rendered after all shapes so they always appear on top */}
+            {callouts.filter((c) => c.visible).map((callout) => {
+              const fs = 14 / vpScale, padV = 3 / vpScale, padH = 6 / vpScale
+              const bgH = fs + padV * 2
+
+              if (callout.geometry.type === 'rectangle') {
+                const { x = 0, y = 0, width: w = 0, height: h = 0 } = callout.geometry
+                const { x: px, y: py } = normToImage(x, y)
+                const pw = w * imageW, ph = h * imageH
+                const lcx = px + pw / 2, lcy = py + ph / 2
+                const bgW = callout.name.length * fs * 0.52 + padH * 2
+                return (
+                  <React.Fragment key={`lbl-${callout._id}`}>
+                    <Rect
+                      x={lcx - bgW / 2} y={lcy - bgH / 2}
+                      width={bgW} height={bgH}
+                      fill="rgba(0,0,0,0.65)" cornerRadius={2 / vpScale} listening={false}
+                    />
+                    <Text
+                      x={lcx - bgW / 2} y={lcy - bgH / 2 + padV}
+                      width={bgW} align="center"
+                      text={callout.name} fontSize={fs} fontFamily="Barlow" fill="#fff" listening={false}
+                    />
+                  </React.Fragment>
+                )
+              }
+
+              if (callout.geometry.type === 'polygon' && callout.geometry.points) {
+                const pts = callout.geometry.points
+                const flat = pts.flatMap((p, i) => i % 2 === 0 ? p * imageW : p * imageH)
+                const xs = flat.filter((_, i) => i % 2 === 0)
+                const ys = flat.filter((_, i) => i % 2 !== 0)
+                const cx = xs.reduce((a, b) => a + b, 0) / xs.length
+                const cy = ys.reduce((a, b) => a + b, 0) / ys.length
+                const bgW = callout.name.length * fs * 0.4 + padH * 2
+                return (
+                  <React.Fragment key={`lbl-${callout._id}`}>
+                    <Rect
+                      x={cx - bgW / 2} y={cy - bgH / 2}
+                      width={bgW} height={bgH}
+                      fill="rgba(0,0,0,0.65)" cornerRadius={2 / vpScale} listening={false}
+                    />
+                    <Text
+                      x={cx - bgW / 2} y={cy - bgH / 2 + padV}
+                      width={bgW} align="center"
+                      text={callout.name} fontSize={fs} fontFamily="Barlow" fill="#fff" listening={false}
+                    />
+                  </React.Fragment>
                 )
               }
 

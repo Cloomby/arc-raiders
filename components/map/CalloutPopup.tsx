@@ -6,6 +6,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { CommentThread } from './CommentThread'
 import { COLOR_PRESETS } from '@/lib/utils'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -18,18 +25,26 @@ interface CalloutData {
   geometry: IGeometry
   color: string
   visible: boolean
+  parentId?: string | null
   comments?: IComment[]
   auditLog?: IAuditEntry[]
 }
 
+interface SiblingCallout {
+  _id: string
+  name: string
+  layer: string
+}
+
 interface CalloutPopupProps {
   callout: CalloutData
+  allCallouts: SiblingCallout[]
   onClose: () => void
   canEdit: boolean
   canComment: boolean
 }
 
-export function CalloutPopup({ callout, onClose, canEdit, canComment }: CalloutPopupProps) {
+export function CalloutPopup({ callout, allCallouts, onClose, canEdit, canComment }: CalloutPopupProps) {
   const [editingName, setEditingName] = useState(false)
   const [nameInput, setNameInput] = useState(callout.name)
   const queryClient = useQueryClient()
@@ -44,7 +59,18 @@ export function CalloutPopup({ callout, onClose, canEdit, canComment }: CalloutP
       if (!res.ok) throw new Error('Update failed')
       return res.json()
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['callouts'] }),
+    onMutate: async (data) => {
+      await queryClient.cancelQueries({ queryKey: ['callouts'] })
+      const previous = queryClient.getQueryData(['callouts'])
+      queryClient.setQueryData<CalloutData[]>(['callouts'], (old = []) =>
+        old.map((c) => (c._id === callout._id ? { ...c, ...data } : c))
+      )
+      return { previous }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.previous) queryClient.setQueryData(['callouts'], ctx.previous)
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['callouts'] }),
   })
 
   const saveName = () => {
@@ -53,6 +79,22 @@ export function CalloutPopup({ callout, onClose, canEdit, canComment }: CalloutP
     }
     setEditingName(false)
   }
+
+  // Callouts available as parents: same layer, not self, not own descendants
+  const getDescendantIds = (id: string): Set<string> => {
+    const result = new Set<string>()
+    const queue = [id]
+    while (queue.length) {
+      const cur = queue.shift()!
+      result.add(cur)
+      allCallouts.filter((c) => c._id !== cur && (c as CalloutData).parentId === cur).forEach((c) => queue.push(c._id))
+    }
+    return result
+  }
+  const excludedIds = getDescendantIds(callout._id)
+  const availableParents = allCallouts.filter(
+    (c) => c.layer === callout.layer && !excludedIds.has(c._id)
+  )
 
   return (
     <div className="flex h-full flex-col border-l border-zinc-700 bg-zinc-900">
@@ -132,6 +174,33 @@ export function CalloutPopup({ callout, onClose, canEdit, canComment }: CalloutP
                   title="Custom color"
                 />
               </div>
+            </div>
+          )}
+
+          {/* Parent callout */}
+          {canEdit && availableParents.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Parent
+              </span>
+              <Select
+                value={callout.parentId || 'none'}
+                onValueChange={(v) =>
+                  updateMutation.mutate({ parentId: v === 'none' ? null : v })
+                }
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="No parent" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No parent</SelectItem>
+                  {availableParents.map((c) => (
+                    <SelectItem key={c._id} value={c._id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
 
