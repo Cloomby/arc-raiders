@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Geist, Geist_Mono, Barlow } from 'next/font/google'
 import './globals.css'
 import { Providers } from './providers'
 
@@ -13,6 +13,12 @@ const geistMono = Geist_Mono({
   subsets: ['latin'],
 })
 
+const barlow = Barlow({
+  weight: ['500'],
+  variable: '--font-barlow',
+  subsets: ['latin'],
+})
+
 export const metadata: Metadata = {
   title: 'ARC Raiders — Stella Montis Callouts',
   description: 'Tactical callout map for ARC Raiders — Stella Montis',
@@ -20,7 +26,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full`}>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${barlow.variable} h-full`}>
       <body className="h-full">
         <Providers>{children}</Providers>
       </body>

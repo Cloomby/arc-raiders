@@ -674,7 +674,7 @@ export function CalloutCanvas({
                 const pw = w * imageW, ph = h * imageH
                 const lcx = px + pw / 2, lcy = py + ph / 2
                 const fs = 14 / vpScale, padV = 3 / vpScale, padH = 6 / vpScale
-                const bgW = callout.name.length * fs * 0.6 + padH * 2
+                const bgW = callout.name.length * fs * 0.52 + padH * 2
                 const bgH = fs + padV * 2
                 return (
                   <React.Fragment key={callout._id}>
@@ -691,12 +691,12 @@ export function CalloutCanvas({
                     <Rect
                       x={lcx - bgW / 2} y={lcy - bgH / 2}
                       width={bgW} height={bgH}
-                      fill="rgba(0,0,0,0.65)" cornerRadius={4 / vpScale} listening={false}
+                      fill="rgba(0,0,0,0.65)" cornerRadius={2 / vpScale} listening={false}
                     />
                     <Text
                       x={lcx - bgW / 2} y={lcy - bgH / 2 + padV}
                       width={bgW} align="center"
-                      text={callout.name} fontSize={fs} fill="#fff" listening={false}
+                      text={callout.name} fontSize={fs} fontFamily="Barlow" fill="#fff" listening={false}
                     />
                   </React.Fragment>
                 )
@@ -734,19 +734,19 @@ export function CalloutCanvas({
                     />
                     {(() => {
                       const fs = 14 / vpScale, padV = 3 / vpScale, padH = 6 / vpScale
-                      const bgW = callout.name.length * fs * 0.6 + padH * 2
+                      const bgW = callout.name.length * fs * 0.4 + padH * 2
                       const bgH = fs + padV * 2
                       return (
                         <>
                           <Rect
                             x={cx - bgW / 2} y={cy - bgH / 2}
                             width={bgW} height={bgH}
-                            fill="rgba(0,0,0,0.65)" cornerRadius={4 / vpScale} listening={false}
+                            fill="rgba(0,0,0,0.65)" cornerRadius={2 / vpScale} listening={false}
                           />
                           <Text
                             x={cx - bgW / 2} y={cy - bgH / 2 + padV}
                             width={bgW} align="center"
-                            text={callout.name} fontSize={fs} fill="#fff" listening={false}
+                            text={callout.name} fontSize={fs} fontFamily="Barlow" fill="#fff" listening={false}
                           />
                         </>
                       )
