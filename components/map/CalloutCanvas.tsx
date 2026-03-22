@@ -53,32 +53,82 @@ const HANDLE_RADIUS = 6
 const CLOSE_THRESHOLD = HANDLE_RADIUS * 2.5
 /** Degrees to snap to when Shift is held */
 const SNAP_DEGREES = 15
+/** Snap zone around a vertex (screen pixels) for cardinal vertex alignment */
+const VERTEX_SNAP_PX = 12
 
 /**
- * Snap the point (toNx, toNy) to the nearest SNAP_DEGREES angle from (fromNx, fromNy).
- * Distance is preserved from the unsnapped cursor position.
- * Operates in normalised coords but uses image-pixel aspect ratio for correct angles.
+ * Full polygon point snap with Shift held:
+ *   1. 15° angle snap from (fromN) to cursor (rawN)
+ *   2. If the snapped angle is exactly cardinal (0/90/180/270°), also check whether
+ *      any existing polyPoint lies on the same cardinal axis from fromN and is within
+ *      the snap zone — if so, lock onto that vertex instead.
+ *
+ * Returns the snapped position plus a flag indicating vertex snap was active
+ * (for distinct visual feedback).
  */
-function snapToAngle(
+function snapPolygonPoint(
   fromNx: number, fromNy: number,
-  toNx: number, toNy: number,
+  rawNx: number, rawNy: number,
+  polyPoints: number[],
   imageW: number, imageH: number,
-): { x: number; y: number } {
-  const fromPx = fromNx * imageW
-  const fromPy = fromNy * imageH
-  const toPx = toNx * imageW
-  const toPy = toNy * imageH
-  const dx = toPx - fromPx
-  const dy = toPy - fromPy
+  vpScale: number,
+): { x: number; y: number; hasVertexSnap: boolean } {
+  const fromPx = fromNx * imageW, fromPy = fromNy * imageH
+  const rawPx  = rawNx  * imageW, rawPy  = rawNy  * imageH
+  const dx = rawPx - fromPx, dy = rawPy - fromPy
   const dist = Math.sqrt(dx * dx + dy * dy)
-  if (dist < 1) return { x: toNx, y: toNy }
-  const angle = Math.atan2(dy, dx)
+  if (dist < 1) return { x: rawNx, y: rawNy, hasVertexSnap: false }
+
+  // ── Step 1: 15° angle snap ───────────────────────────────────────────────
   const snapRad = SNAP_DEGREES * (Math.PI / 180)
-  const snapped = Math.round(angle / snapRad) * snapRad
-  return {
-    x: (fromPx + dist * Math.cos(snapped)) / imageW,
-    y: (fromPy + dist * Math.sin(snapped)) / imageH,
+  const snappedAngle = Math.round(Math.atan2(dy, dx) / snapRad) * snapRad
+  let sPx = fromPx + dist * Math.cos(snappedAngle)
+  let sPy = fromPy + dist * Math.sin(snappedAngle)
+  let hasVertexSnap = false
+
+  // ── Step 2: Cardinal vertex alignment (only when snapped to 0/90/180/270°) ──
+  const isHorizontal = Math.abs(Math.sin(snappedAngle)) < 0.01
+  const isVertical   = Math.abs(Math.cos(snappedAngle)) < 0.01
+
+  if (isHorizontal || isVertical) {
+    const thresh = VERTEX_SNAP_PX / vpScale          // alignment tolerance in image px
+    const zone   = VERTEX_SNAP_PX * 2 / vpScale      // proximity snap zone in image px
+    const lastIdx = polyPoints.length - 2             // skip the point we started from
+
+    let bestZoneDist = zone
+
+    for (let i = 0; i < polyPoints.length; i += 2) {
+      if (i === lastIdx) continue
+      const vPx = polyPoints[i]     * imageW
+      const vPy = polyPoints[i + 1] * imageH
+
+      if (isHorizontal && Math.abs(vPy - fromPy) < thresh) {
+        // Vertex shares the same horizontal line as fromP
+        if (Math.sign(vPx - fromPx) === Math.sign(Math.cos(snappedAngle))) {
+          const d = Math.abs(sPx - vPx)
+          if (d < bestZoneDist) {
+            bestZoneDist = d
+            sPx = vPx; sPy = fromPy
+            hasVertexSnap = true
+          }
+        }
+      }
+
+      if (isVertical && Math.abs(vPx - fromPx) < thresh) {
+        // Vertex shares the same vertical line as fromP
+        if (Math.sign(vPy - fromPy) === Math.sign(Math.sin(snappedAngle))) {
+          const d = Math.abs(sPy - vPy)
+          if (d < bestZoneDist) {
+            bestZoneDist = d
+            sPy = vPy; sPx = fromPx
+            hasVertexSnap = true
+          }
+        }
+      }
+    }
   }
+
+  return { x: sPx / imageW, y: sPy / imageH, hasVertexSnap }
 }
 
 interface Viewport { x: number; y: number; scale: number }
@@ -379,11 +429,11 @@ export function CalloutCanvas({
               return
             }
           }
-          // Apply angle snap when Shift is held
+          // Apply angle + vertex-alignment snap when Shift is held
           const lastNx = polyPoints[polyPoints.length - 2]
           const lastNy = polyPoints[polyPoints.length - 1]
           const snapped = shiftHeldRef.current
-            ? snapToAngle(lastNx, lastNy, normPos.x, normPos.y, imageW, imageH)
+            ? snapPolygonPoint(lastNx, lastNy, normPos.x, normPos.y, polyPoints, imageW, imageH, vpRef.current.scale)
             : normPos
           setPolyPoints((prev) => [...prev, snapped.x, snapped.y])
         }
@@ -551,25 +601,30 @@ export function CalloutCanvas({
 
   const canClosePoly = isPolygonOpen && polyPoints.length >= 6
 
-  // Live edge preview: last placed point → cursor (snapped when Shift held)
-  const liveEdgeFlat = useMemo(() => {
+  // Live snap result for preview — recomputed on every mouse-move / shift-toggle
+  const liveSnap = useMemo(() => {
     if (!isPolygonOpen || !polyMousePos || polyPoints.length < 2) return null
     const lastNx = polyPoints[polyPoints.length - 2]
     const lastNy = polyPoints[polyPoints.length - 1]
-    const end = shiftHeld
-      ? snapToAngle(lastNx, lastNy, polyMousePos.x, polyMousePos.y, imageW, imageH)
-      : polyMousePos
-    return [lastNx * imageW, lastNy * imageH, end.x * imageW, end.y * imageH]
-  }, [isPolygonOpen, polyMousePos, polyPoints, shiftHeld, imageW, imageH])
+    if (!shiftHeld) {
+      return { end: polyMousePos, hasVertexSnap: false }
+    }
+    const result = snapPolygonPoint(lastNx, lastNy, polyMousePos.x, polyMousePos.y, polyPoints, imageW, imageH, vpScale)
+    return { end: result, hasVertexSnap: result.hasVertexSnap }
+  }, [isPolygonOpen, polyMousePos, polyPoints, shiftHeld, imageW, imageH, vpScale])
 
-  // When snapping, also show where the snapped point will land
-  const snapIndicatorPos = useMemo(() => {
-    if (!isPolygonOpen || !polyMousePos || !shiftHeld || polyPoints.length < 2) return null
+  const liveEdgeFlat = useMemo(() => {
+    if (!liveSnap || polyPoints.length < 2) return null
     const lastNx = polyPoints[polyPoints.length - 2]
     const lastNy = polyPoints[polyPoints.length - 1]
-    const snapped = snapToAngle(lastNx, lastNy, polyMousePos.x, polyMousePos.y, imageW, imageH)
-    return { x: snapped.x * imageW, y: snapped.y * imageH }
-  }, [isPolygonOpen, polyMousePos, shiftHeld, polyPoints, imageW, imageH])
+    const { end } = liveSnap
+    return [lastNx * imageW, lastNy * imageH, end.x * imageW, end.y * imageH]
+  }, [liveSnap, polyPoints, imageW, imageH])
+
+  const snapIndicatorPos = useMemo(() => {
+    if (!liveSnap || !shiftHeld) return null
+    return { x: liveSnap.end.x * imageW, y: liveSnap.end.y * imageH, isVertex: liveSnap.hasVertexSnap }
+  }, [liveSnap, shiftHeld, imageW, imageH])
 
   return (
     <div
@@ -616,11 +671,16 @@ export function CalloutCanvas({
               if (callout.geometry.type === 'rectangle') {
                 const { x = 0, y = 0, width: w = 0, height: h = 0, rotation = 0 } = callout.geometry
                 const { x: px, y: py } = normToImage(x, y)
+                const pw = w * imageW, ph = h * imageH
+                const lcx = px + pw / 2, lcy = py + ph / 2
+                const fs = 14 / vpScale, padV = 3 / vpScale, padH = 6 / vpScale
+                const bgW = callout.name.length * fs * 0.6 + padH * 2
+                const bgH = fs + padV * 2
                 return (
                   <React.Fragment key={callout._id}>
                     <Rect
                       ref={(node) => { if (isSelected && node) selectedNodeRef.current = node }}
-                      x={px} y={py} width={w * imageW} height={h * imageH} rotation={rotation}
+                      x={px} y={py} width={pw} height={ph} rotation={rotation}
                       fill={callout.color + fillOpacity} stroke={stroke} strokeWidth={strokeWidth}
                       draggable={canEdit && mode === 'select'}
                       onClick={() => onSelect(callout._id)}
@@ -628,9 +688,15 @@ export function CalloutCanvas({
                       onDragEnd={(e) => handleShapeDragEnd(callout, e)}
                       onTransformEnd={(e) => handleTransformEnd(callout, e)}
                     />
+                    <Rect
+                      x={lcx - bgW / 2} y={lcy - bgH / 2}
+                      width={bgW} height={bgH}
+                      fill="rgba(0,0,0,0.65)" cornerRadius={4 / vpScale} listening={false}
+                    />
                     <Text
-                      x={px + 4} y={py + 4} text={callout.name} fontSize={14}
-                      fill="#fff" shadowColor="black" shadowBlur={6} shadowOpacity={1} listening={false}
+                      x={lcx - bgW / 2} y={lcy - bgH / 2 + padV}
+                      width={bgW} align="center"
+                      text={callout.name} fontSize={fs} fill="#fff" listening={false}
                     />
                   </React.Fragment>
                 )
@@ -666,10 +732,25 @@ export function CalloutCanvas({
                       onClick={() => onSelect(callout._id)}
                       onTap={() => onSelect(callout._id)}
                     />
-                    <Text
-                      x={cx - 24} y={cy - 8} text={callout.name} fontSize={14}
-                      fill="#fff" shadowColor="black" shadowBlur={6} shadowOpacity={1} listening={false}
-                    />
+                    {(() => {
+                      const fs = 14 / vpScale, padV = 3 / vpScale, padH = 6 / vpScale
+                      const bgW = callout.name.length * fs * 0.6 + padH * 2
+                      const bgH = fs + padV * 2
+                      return (
+                        <>
+                          <Rect
+                            x={cx - bgW / 2} y={cy - bgH / 2}
+                            width={bgW} height={bgH}
+                            fill="rgba(0,0,0,0.65)" cornerRadius={4 / vpScale} listening={false}
+                          />
+                          <Text
+                            x={cx - bgW / 2} y={cy - bgH / 2 + padV}
+                            width={bgW} align="center"
+                            text={callout.name} fontSize={fs} fill="#fff" listening={false}
+                          />
+                        </>
+                      )
+                    })()}
 
                     {/* Vertex edit handles — only for editors with the polygon selected */}
                     {canEdit && mode === 'select' && isSelected &&
@@ -727,10 +808,10 @@ export function CalloutCanvas({
               <Circle
                 x={snapIndicatorPos.x}
                 y={snapIndicatorPos.y}
-                radius={handleR * 1.2}
-                fill="rgba(136,255,136,0.25)"
-                stroke="#88FF88"
-                strokeWidth={handleStroke}
+                radius={snapIndicatorPos.isVertex ? handleR * 1.8 : handleR * 1.2}
+                fill={snapIndicatorPos.isVertex ? 'rgba(136,255,136,0.35)' : 'rgba(136,255,136,0.2)'}
+                stroke={snapIndicatorPos.isVertex ? '#00FF88' : '#88FF88'}
+                strokeWidth={snapIndicatorPos.isVertex ? handleStroke * 1.5 : handleStroke}
                 listening={false}
               />
             )}

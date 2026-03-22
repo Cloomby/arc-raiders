@@ -106,7 +106,7 @@ function CommentItem({
               {new Date(comment.createdAt).toLocaleDateString()}
             </span>
           </div>
-          <p className="mt-0.5 text-sm text-zinc-200 break-words">{comment.text}</p>
+          <p className="mt-0.5 text-sm text-zinc-200 wrap-break-word">{comment.text}</p>
           {canComment && depth === 0 && (
             <button
               onClick={() => setReplying((v) => !v)}
